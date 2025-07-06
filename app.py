@@ -6,9 +6,26 @@ from sklearn.metrics.pairwise import cosine_similarity
 import requests
 from requests.exceptions import RequestException
 import time
+import torch  # Ajouté pour la gestion du device
 from tenacity import retry, stop_after_attempt, wait_exponential
 
+# ---------------------- Configuration de base ----------------------
 st.set_page_config(page_title="MedRegBot", layout="wide")
+
+# ---------------------- Gestion des erreurs initiale ----------------------
+@st.cache_resource
+def load_model():
+    try:
+        device = 'cuda' if torch.cuda.is_available() else 'cpu'
+        # Utilisation d'un modèle plus léger pour compatibilité CPU
+        model = SentenceTransformer(
+            "sentence-transformers/all-MiniLM-L6-v2",
+            device=device
+        )
+        return model
+    except Exception as e:
+        st.error(f"Échec du chargement du modèle: {str(e)}")
+        return None
 
 # ---------------------- Logos ----------------------
 col1, col2, col3 = st.columns([1, 4, 1])
@@ -21,18 +38,29 @@ with col3:
     st.image("logo_right.jpeg", width=100)
 st.markdown("---")
 
-# ---------------------- Chargement de la base de données ----------------------
+# ---------------------- Chargement des données ----------------------
 @st.cache_resource
 def load_data():
-    with open("embeddings_from_drive.pkl", "rb") as f:
-        data = pickle.load(f)
-    texts = [d["text"] for d in data]
-    sources = [d.get("source", "Inconnu") for d in data]
-    embeddings = np.array([d["embedding"] for d in data])
-    return texts, sources, embeddings
+    try:
+        with open("embeddings_from_drive.pkl", "rb") as f:
+            data = pickle.load(f)
+        texts = [d["text"] for d in data]
+        sources = [d.get("source", "Inconnu") for d in data]
+        embeddings = np.array([d["embedding"] for d in data])
+        return texts, sources, embeddings
+    except Exception as e:
+        st.error(f"Erreur de chargement des données: {str(e)}")
+        return [], [], np.array([])
 
 texts, sources, embeddings = load_data()
-model = SentenceTransformer("sentence-transformers/LaBSE")
+model = load_model()
+
+if model is None:
+    st.warning("""
+    Mode dégradé activé (sans IA). 
+    Fonctionnalités limitées disponibles.
+    """)
+    # Vous pourriez ajouter ici une logique de repli simple
 
 # ---------------------- Style ----------------------
 whatsapp_style = '''
@@ -61,6 +89,11 @@ whatsapp_style = '''
     color: #666;
     font-style: italic;
 }
+.error-msg {
+    color: #ff3333;
+    border-left: 3px solid #ff3333;
+    padding-left: 10px;
+}
 </style>
 '''
 st.markdown(whatsapp_style, unsafe_allow_html=True)
@@ -68,20 +101,20 @@ st.markdown(whatsapp_style, unsafe_allow_html=True)
 # ---------------------- Configuration API ----------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def query_mistral(prompt, context):
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"  # Version mise à jour
-    headers = {
-        "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",  # Accès plus sécurisé
-        "Content-Type": "application/json"
-    }
-    
-    full_prompt = f"""<s>[INST] Tu es un expert en réglementation médicale EU. 
-    Réponds en français en t'appuyant strictement sur ce contexte:
-    
-    Contexte: {context}
-    
-    Question: {prompt} [/INST]"""
-    
     try:
+        API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
+        headers = {
+            "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
+            "Content-Type": "application/json"
+        }
+        
+        full_prompt = f"""<s>[INST] Tu es un expert en réglementation médicale EU. 
+        Réponds en français en t'appuyant strictement sur ce contexte:
+        
+        Contexte: {context}
+        
+        Question: {prompt} [/INST]"""
+        
         response = requests.post(
             API_URL,
             headers=headers,
@@ -89,15 +122,18 @@ def query_mistral(prompt, context):
                 "inputs": full_prompt,
                 "parameters": {
                     "max_new_tokens": 350,
-                    "temperature": 0.5  # Réponses plus précises
+                    "temperature": 0.5
                 }
             },
             timeout=25
         )
-        response.raise_for_status()  # Lève une exception pour les codes 4XX/5XX
+        response.raise_for_status()
         return response
     except requests.HTTPError as http_err:
-        st.error(f"Erreur HTTP: {http_err}")
+        st.error(f"Erreur API: {http_err}")
+        return None
+    except Exception as e:
+        st.error(f"Erreur inattendue: {str(e)}")
         return None
 
 # ---------------------- Session state ----------------------
@@ -114,44 +150,44 @@ for role, msg in st.session_state.history:
         st.markdown(f"<div class='bot-msg'>{msg}</div>", unsafe_allow_html=True)
     elif role == "loading":
         st.markdown(f"<div class='loading-msg'>{msg}</div>", unsafe_allow_html=True)
+    elif role == "error":
+        st.markdown(f"<div class='error-msg'>{msg}</div>", unsafe_allow_html=True)
 
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
-    # Étape 1: Ajout du message utilisateur
     st.session_state.history.append(("user", user_input))
     loading_msg = st.empty()
     
     try:
-        # Étape 2: Recherche contextuelle
+        # Recherche contextuelle
         loading_msg.markdown("<div class='loading-msg'>🔍 Recherche dans les textes réglementaires...</div>", unsafe_allow_html=True)
-        question_embedding = model.encode([user_input])
-        similarities = cosine_similarity(question_embedding, embeddings)[0]
-        top_indices = similarities.argsort()[-3:][::-1]
-        context = "\n".join([texts[i] for i in top_indices])
         
-        # Étape 3: Appel API
+        if model is not None:
+            question_embedding = model.encode([user_input])
+            similarities = cosine_similarity(question_embedding, embeddings)[0]
+            top_indices = similarities.argsort()[-3:][::-1]
+            context = "\n".join([texts[i] for i in top_indices])
+        else:
+            # Fallback sans modèle
+            context = "\n".join(texts[:3])  # Premiers textes comme contexte
+        
+        # Appel API
         loading_msg.markdown("<div class='loading-msg'>🧠 Analyse par l'expert IA...</div>", unsafe_allow_html=True)
-        start_time = time.time()
         
-        response = query_mistral(user_input, context)
+        response = query_mistral(user_input, context) if st.secrets.get('HF_TOKEN') else None
         
-        if time.time() - start_time > 15:
-            loading_msg.markdown("<div class='loading-msg'>⏳ L'analyse prend plus de temps que prévu...</div>", unsafe_allow_html=True)
-        
-        # Étape 4: Traitement réponse
-        if response.status_code == 200:
+        if response and response.status_code == 200:
             generated_text = response.json()[0]["generated_text"]
             answer = generated_text.split("[/INST]")[-1].strip()
-        elif response.status_code == 503:
-            answer = "⚠️ Le système est occupé. Merci de reformuler votre question."
         else:
-            answer = f"⚠️ Erreur API (code {response.status_code})"
+            answer = """⚠️ Service IA temporairement indisponible. 
+            Voici les extraits pertinents :
+            \n\n""" + "\n\n- ".join([texts[i] for i in (top_indices if model else range(3))])
             
     except Exception as e:
-        answer = f"⚠️ Service temporairement indisponible: {str(e)}"
+        answer = f"<div class='error-msg'>⚠️ Erreur critique: {str(e)}</div>"
     finally:
         loading_msg.empty()
     
-    # Étape 5: Affichage réponse
     st.session_state.history.append(("bot", answer))
     st.rerun()
