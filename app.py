@@ -18,11 +18,8 @@ with col3:
     st.image("logo_right.jpeg", width=100)
 st.markdown("---")
 
-uploaded
-
-texts = [d["text"] for d in data]
-sources = [d.get("source", "Inconnu")] * len(data)
-embeddings = np.array([d["embedding"] for d in data])
+with open("embeddings_from_drive.pkl", "rb") as f:
+    data = pickle.load(f)
 
 model = SentenceTransformer("sentence-transformers/LaBSE")
 
