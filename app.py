@@ -5,6 +5,7 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import requests
 from requests.exceptions import RequestException
+import time
 
 st.set_page_config(page_title="MedRegBot", layout="wide")
 
@@ -55,6 +56,10 @@ whatsapp_style = '''
     margin-right: auto;
     text-align: left;
 }
+.loading-msg {
+    color: #666;
+    font-style: italic;
+}
 </style>
 '''
 st.markdown(whatsapp_style, unsafe_allow_html=True)
@@ -69,12 +74,18 @@ st.markdown("### 💬 Chat avec MedRegBot")
 for role, msg in st.session_state.history:
     if role == "user":
         st.markdown(f"<div class='user-msg'>{msg}</div>", unsafe_allow_html=True)
-    else:
+    elif role == "bot":
         st.markdown(f"<div class='bot-msg'>{msg}</div>", unsafe_allow_html=True)
+    elif role == "loading":
+        st.markdown(f"<div class='loading-msg'>{msg}</div>", unsafe_allow_html=True)
 
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
     st.session_state.history.append(("user", user_input))
+    
+    # Message de chargement
+    st.session_state.history.append(("loading", "Recherche dans les réglementations..."))
+    st.experimental_rerun()
 
     try:
         # --------- Récupération des chunks pertinents ---------
@@ -83,44 +94,57 @@ if user_input:
         top_indices = similarities.argsort()[-3:][::-1]
         context = "\n".join([texts[i] for i in top_indices])
 
-        # --------- Construction du prompt pour Gemma ---------
-        prompt = f"""Tu es un expert en réglementation des dispositifs médicaux. 
-        En te basant sur le texte suivant, réponds de façon claire et complète à la question utilisateur.
-        
-        Texte: {context}
-        
-        Question: {user_input}
-        
-        Réponse:"""
+        # --------- Construction du prompt pour Mistral ---------
+        prompt = f"""<s>[INST] Tu es un expert en réglementation des dispositifs médicaux. 
+        Réponds en français en t'appuyant sur le contexte suivant:
 
-        # --------- Appel à l'API Hugging Face ---------
-        API_URL = "https://api-inference.huggingface.co/models/google/gemma-7b-it"
+        Contexte: {context}
+
+        Question: {user_input} [/INST]"""
+
+        # --------- Appel à l'API Hugging Face (Mistral gratuit) ---------
+        API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
         
-        if "HF_TOKEN" not in st.secrets:
-            raise ValueError("Token Hugging Face non configuré")
-            
         headers = {
-            "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
+            "Authorization": f"Bearer {st.secrets.get('HF_TOKEN', '')}",
             "Content-Type": "application/json"
         }
 
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json={"inputs": prompt},
-            timeout=30
-        )
+        # Supprimer le message de chargement
+        st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
+        st.experimental_rerun()
+
+        with st.spinner("Génération de la réponse..."):
+            response = requests.post(
+                API_URL,
+                headers=headers,
+                json={
+                    "inputs": prompt,
+                    "parameters": {"max_new_tokens": 500}
+                },
+                timeout=45  # Temps plus long pour l'API gratuite
+            )
         
         if response.status_code == 200:
             generated_text = response.json()[0]["generated_text"]
-            answer = generated_text.split("Réponse:")[-1].strip()
+            # Extraction de la partie après [/INST]
+            answer = generated_text.split("[/INST]")[-1].strip()
+        elif response.status_code == 503:
+            # Cas où le modèle doit être chargé
+            answer = "⚠️ Le modèle est en cours de chargement (attente 20-30s)..."
+            st.session_state.history.append(("loading", answer))
+            st.experimental_rerun()
+            time.sleep(25)  # Attente pour le chargement du modèle
+            return  # L'utilisateur devra renvoyer sa question
         else:
-            answer = f"⚠️ Erreur API (code {response.status_code}): {response.text}"
+            answer = f"⚠️ Erreur API (code {response.status_code}): {response.text[:200]}..."
 
     except RequestException as e:
         answer = f"⚠️ Erreur de connexion: {str(e)}"
     except Exception as e:
         answer = f"⚠️ Erreur inattendue: {str(e)}"
 
-    st.markdown(f"<div class='bot-msg'>{answer}</div>", unsafe_allow_html=True)
+    # Supprimer les messages de chargement et ajouter la réponse
+    st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
     st.session_state.history.append(("bot", answer))
+    st.experimental_rerun()
