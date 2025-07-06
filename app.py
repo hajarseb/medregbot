@@ -99,9 +99,14 @@ whatsapp_style = '''
 st.markdown(whatsapp_style, unsafe_allow_html=True)
 
 # ---------------------- Configuration API ----------------------
+# ---------------------- Configuration API améliorée ----------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def query_mistral(prompt, context):
     try:
+        if not st.secrets.get('HF_TOKEN'):
+            st.error("Token API non configuré")
+            return None
+
         API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"
         headers = {
             "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",
@@ -125,17 +130,57 @@ def query_mistral(prompt, context):
                     "temperature": 0.5
                 }
             },
-            timeout=25
+            timeout=30
         )
-        response.raise_for_status()
         return response
-    except requests.HTTPError as http_err:
-        st.error(f"Erreur API: {http_err}")
-        return None
-    except Exception as e:
-        st.error(f"Erreur inattendue: {str(e)}")
+    
+    except requests.exceptions.RequestException as e:
+        st.error(f"Erreur de connexion: {str(e)}")
         return None
 
+# ---------------------- Gestion de la réponse dans le chat ----------------------
+if user_input:
+    st.session_state.history.append(("user", user_input))
+    loading_msg = st.empty()
+    
+    try:
+        # 1. Recherche contextuelle
+        loading_msg.markdown("<div class='loading-msg'>🔍 Recherche dans les textes réglementaires...</div>", unsafe_allow_html=True)
+        
+        question_embedding = model.encode([user_input]) if model else None
+        if question_embedding is not None:
+            similarities = cosine_similarity(question_embedding, embeddings)[0]
+            top_indices = similarities.argsort()[-3:][::-1]
+            context = "\n".join([f"Source: {sources[i]}\n{texts[i]}" for i in top_indices])
+        else:
+            context = "\n".join([f"Source: {sources[i]}\n{texts[i]}" for i in range(min(3, len(texts)))])
+        
+        # 2. Appel API avec gestion des erreurs renforcée
+        loading_msg.markdown("<div class='loading-msg'>🧠 Analyse par l'expert IA...</div>", unsafe_allow_html=True)
+        
+        response = query_mistral(user_input, context)
+        
+        if response is not None and response.status_code == 200:
+            try:
+                generated_text = response.json()[0]["generated_text"]
+                answer = generated_text.split("[/INST]")[-1].strip()
+            except (KeyError, IndexError) as e:
+                answer = f"⚠️ Format de réponse inattendu\n\nExtraits pertinents:\n{context}"
+        else:
+            answer = f"""ℹ️ Service IA indisponible - Voici les références réglementaires pertinentes :
+            
+            {context}"""
+            
+    except Exception as e:
+        answer = f"""⚠️ Erreur temporaire
+        \n\nNous vous proposons ces extraits :
+        \n{context if 'context' in locals() else 'Aucune référence disponible'}"""
+    
+    finally:
+        loading_msg.empty()
+    
+    st.session_state.history.append(("bot", answer))
+    st.rerun()
 # ---------------------- Session state ----------------------
 if "history" not in st.session_state:
     st.session_state.history = []
