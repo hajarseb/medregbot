@@ -10,12 +10,12 @@ st.set_page_config(page_title="MedRegBot", layout="wide")
 
 col1, col2, col3 = st.columns([1, 4, 1])
 with col1:
-    st.image(logo_left.jpeg, width=120)
+    st.image("logo_left.jpeg", width=120)
 with col2:
     st.markdown("<h1 style='text-align: center; color: #003366;'>MedRegBot</h1>", unsafe_allow_html=True)
     st.markdown("<h4 style='text-align: center; color: #005580;'>Votre assistant IA pour la réglementation des dispositifs médicaux</h4>", unsafe_allow_html=True)
 with col3:
-    st.image(logo_right.jpeg, width=100)
+    st.image("logo_right.jpeg", width=100)
 st.markdown("---")
 
 with open("embeddings_from_drive.pkl", "rb") as f:
