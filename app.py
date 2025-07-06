@@ -68,32 +68,37 @@ st.markdown(whatsapp_style, unsafe_allow_html=True)
 # ---------------------- Configuration API ----------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def query_mistral(prompt, context):
-    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.2"  # Version mise à jour
     headers = {
-        "Authorization": f"Bearer {st.secrets.get('HF_TOKEN', '')}",
+        "Authorization": f"Bearer {st.secrets['HF_TOKEN']}",  # Accès plus sécurisé
         "Content-Type": "application/json"
     }
     
-    full_prompt = f"""<s>[INST] Tu es un expert en réglementation médicale. 
-    Réponds en français en 3-5 phrases maximum en t'appuyant sur ce contexte:
+    full_prompt = f"""<s>[INST] Tu es un expert en réglementation médicale EU. 
+    Réponds en français en t'appuyant strictement sur ce contexte:
     
     Contexte: {context}
     
     Question: {prompt} [/INST]"""
     
-    response = requests.post(
-        API_URL,
-        headers=headers,
-        json={
-            "inputs": full_prompt,
-            "parameters": {
-                "max_new_tokens": 350,
-                "temperature": 0.7
-            }
-        },
-        timeout=20
-    )
-    return response
+    try:
+        response = requests.post(
+            API_URL,
+            headers=headers,
+            json={
+                "inputs": full_prompt,
+                "parameters": {
+                    "max_new_tokens": 350,
+                    "temperature": 0.5  # Réponses plus précises
+                }
+            },
+            timeout=25
+        )
+        response.raise_for_status()  # Lève une exception pour les codes 4XX/5XX
+        return response
+    except requests.HTTPError as http_err:
+        st.error(f"Erreur HTTP: {http_err}")
+        return None
 
 # ---------------------- Session state ----------------------
 if "history" not in st.session_state:
