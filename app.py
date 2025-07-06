@@ -81,9 +81,12 @@ for role, msg in st.session_state.history:
 
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
+    # Ajout de la question et message de chargement
     st.session_state.history.append(("user", user_input))
     st.session_state.history.append(("loading", "Recherche dans les réglementations..."))
-    st.experimental_rerun()
+    
+    # Utilisation de st.rerun() au lieu de st.experimental_rerun()
+    st.rerun()
 
     try:
         # --------- Récupération des chunks pertinents ---------
@@ -108,20 +111,21 @@ if user_input:
             "Content-Type": "application/json"
         }
 
-        # Supprimer le message de chargement initial
+        # Mise à jour du message de chargement
         st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
         st.session_state.history.append(("loading", "Génération de la réponse..."))
-        st.experimental_rerun()
+        st.rerun()
 
-        response = requests.post(
-            API_URL,
-            headers=headers,
-            json={
-                "inputs": prompt,
-                "parameters": {"max_new_tokens": 500}
-            },
-            timeout=45
-        )
+        with st.spinner(""):
+            response = requests.post(
+                API_URL,
+                headers=headers,
+                json={
+                    "inputs": prompt,
+                    "parameters": {"max_new_tokens": 500}
+                },
+                timeout=45
+            )
         
         if response.status_code == 200:
             generated_text = response.json()[0]["generated_text"]
@@ -139,4 +143,3 @@ if user_input:
     # Mise à jour finale de l'historique
     st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
     st.session_state.history.append(("bot", answer))
-    st.experimental_rerun()
