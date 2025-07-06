@@ -85,7 +85,7 @@ if user_input:
 
     # --------- Appel à l'API Hugging Face Inference (Gemma) ---------
     API_URL = "https://api-inference.huggingface.co/models/google/gemma-7b-it"
-    headers = {"Authorization": "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"}  
+    headers = {"Authorization": "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"}  
 
     response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
     if response.status_code == 200:
