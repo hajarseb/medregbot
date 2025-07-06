@@ -5,7 +5,8 @@ from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import requests
 from requests.exceptions import RequestException
-import time
+import time  # Ajoutez ceci avec les autres imports
+from tenacity import retry, stop_after_attempt, wait_exponential  # Pour les réessais automatiques
 
 st.set_page_config(page_title="MedRegBot", layout="wide")
 
@@ -81,35 +82,75 @@ for role, msg in st.session_state.history:
 
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
-    # Ajout de la question et message de chargement
+    # Étape 1: Ajout du message utilisateur
     st.session_state.history.append(("user", user_input))
-    st.session_state.history.append(("loading", "Recherche dans les réglementations..."))
+    loading_msg = st.empty()  # Crée un placeholder pour le message de chargement
     
-    # Utilisation de st.rerun() au lieu de st.experimental_rerun()
-    st.rerun()
-
     try:
-        # --------- Récupération des chunks pertinents ---------
+        # Étape 2: Recherche contextuelle (rapide)
+        loading_msg.markdown("<div class='loading-msg'>🔍 Recherche dans les textes réglementaires...</div>", unsafe_allow_html=True)
         question_embedding = model.encode([user_input])
         similarities = cosine_similarity(question_embedding, embeddings)[0]
         top_indices = similarities.argsort()[-3:][::-1]
         context = "\n".join([texts[i] for i in top_indices])
-
-        # --------- Construction du prompt pour Mistral ---------
-        prompt = f"""<s>[INST] Tu es un expert en réglementation des dispositifs médicaux. 
-        Réponds en français en t'appuyant sur le contexte suivant:
-
-        Contexte: {context}
-
-        Question: {user_input} [/INST]"""
+        
+        # Étape 3: Appel API avec gestion du temps
+        loading_msg.markdown("<div class='loading-msg'>🧠 Analyse par l'expert IA...</div>", unsafe_allow_html=True)
+        start_time = time.time()
+        
+        response = query_mistral(user_input, context)
+        
+        # Feedback si délai dépassé
+        if time.time() - start_time > 15:
+            loading_msg.markdown("<div class='loading-msg'>⏳ L'analyse prend plus de temps que prévu...</div>", unsafe_allow_html=True)
+        
+        # Étape 4: Traitement réponse
+        if response.status_code == 200:
+            generated_text = response.json()[0]["generated_text"]
+            answer = generated_text.split("[/INST]")[-1].strip()
+        elif response.status_code == 503:
+            answer = "⚠️ Le système est occupé. Merci de reformuler votre question."
+        else:
+            answer = f"⚠️ Réponse partielle (code {response.status_code})"
+            
+    except Exception as e:
+        answer = f"⚠️ Service temporairement indisponible: {str(e)}"
+    finally:
+        loading_msg.empty()  # Supprime le message de chargement
+    
+    # Étape 5: Affichage réponse
+    st.session_state.history.append(("bot", answer))
 
         # --------- Appel à l'API Hugging Face (Mistral gratuit) ---------
-        API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
-        
-        headers = {
-            "Authorization": f"Bearer {st.secrets.get('HF_TOKEN', '')}",
-            "Content-Type": "application/json"
-        }
+        # ---------------------- Configuration API ----------------------
+@retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
+def query_mistral(prompt, context):
+    API_URL = "https://api-inference.huggingface.co/models/mistralai/Mistral-7B-Instruct-v0.1"
+    headers = {
+        "Authorization": f"Bearer {st.secrets.get('HF_TOKEN', '')}",
+        "Content-Type": "application/json"
+    }
+    
+    full_prompt = f"""<s>[INST] Tu es un expert en réglementation médicale. 
+    Réponds en français en 3-5 phrases maximum en t'appuyant sur ce contexte:
+    
+    Contexte: {context}
+    
+    Question: {prompt} [/INST]"""
+    
+    response = requests.post(
+        API_URL,
+        headers=headers,
+        json={
+            "inputs": full_prompt,
+            "parameters": {
+                "max_new_tokens": 350,  # Réponse plus courte
+                "temperature": 0.7  # Moins de créativité, plus factuel
+            }
+        },
+        timeout=20  # Timeout plus court
+    )
+    return response
 
         # Mise à jour du message de chargement
         st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
