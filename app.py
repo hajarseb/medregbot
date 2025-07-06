@@ -6,28 +6,63 @@ from sklearn.metrics.pairwise import cosine_similarity
 import requests
 from requests.exceptions import RequestException
 import time
-import torch  # Ajouté pour la gestion du device
+import torch
 from tenacity import retry, stop_after_attempt, wait_exponential
 
 # ---------------------- Configuration de base ----------------------
 st.set_page_config(page_title="MedRegBot", layout="wide")
 
-# ---------------------- Gestion des erreurs initiale ----------------------
+# ---------------------- Gestion des erreurs améliorée ----------------------
 @st.cache_resource
 def load_model():
     try:
         device = 'cuda' if torch.cuda.is_available() else 'cpu'
-        # Utilisation d'un modèle plus léger pour compatibilité CPU
         model = SentenceTransformer(
             "sentence-transformers/all-MiniLM-L6-v2",
             device=device
         )
+        st.success("Modèle chargé avec succès")
         return model
     except Exception as e:
         st.error(f"Échec du chargement du modèle: {str(e)}")
         return None
 
-# ---------------------- Logos ----------------------
+@st.cache_resource
+def load_data():
+    try:
+        with open("embeddings_from_drive.pkl", "rb") as f:
+            data = pickle.load(f)
+            if not data or len(data) == 0:
+                raise ValueError("Fichier pickle vide ou invalide")
+            
+            # Validation des données
+            validated_data = []
+            for d in data:
+                if "text" in d and "embedding" in d:
+                    validated_data.append({
+                        "text": d["text"],
+                        "source": d.get("source", "Inconnu"),
+                        "embedding": d["embedding"]
+                    })
+            
+            if not validated_data:
+                raise ValueError("Aucune donnée valide trouvée")
+            
+            return (
+                [d["text"] for d in validated_data],
+                [d["source"] for d in validated_data],
+                np.array([d["embedding"] for d in validated_data])
+            )
+    except Exception as e:
+        st.error(f"Erreur de chargement des données: {str(e)}")
+        # Retourne des données minimales pour permettre le fonctionnement
+        return ["Données non disponibles"], ["Système"], np.random.rand(1, 384)
+
+# ---------------------- Initialisation ----------------------
+model = load_model()
+texts, sources, embeddings = load_data()
+
+# ---------------------- Interface Utilisateur ----------------------
 col1, col2, col3 = st.columns([1, 4, 1])
 with col1:
     st.image("logo_left.jpeg", width=120)
@@ -38,32 +73,8 @@ with col3:
     st.image("logo_right.jpeg", width=100)
 st.markdown("---")
 
-# ---------------------- Chargement des données ----------------------
-@st.cache_resource
-def load_data():
-    try:
-        with open("embeddings_from_drive.pkl", "rb") as f:
-            data = pickle.load(f)
-        texts = [d["text"] for d in data]
-        sources = [d.get("source", "Inconnu") for d in data]
-        embeddings = np.array([d["embedding"] for d in data])
-        return texts, sources, embeddings
-    except Exception as e:
-        st.error(f"Erreur de chargement des données: {str(e)}")
-        return [], [], np.array([])
-
-texts, sources, embeddings = load_data()
-model = load_model()
-
-if model is None:
-    st.warning("""
-    Mode dégradé activé (sans IA). 
-    Fonctionnalités limitées disponibles.
-    """)
-    # Vous pourriez ajouter ici une logique de repli simple
-
-# ---------------------- Style ----------------------
-whatsapp_style = '''
+# ---------------------- Style CSS ----------------------
+st.markdown('''
 <style>
 .user-msg {
     background-color: #ffffff;
@@ -94,12 +105,15 @@ whatsapp_style = '''
     border-left: 3px solid #ff3333;
     padding-left: 10px;
 }
+.warning-msg {
+    color: #cc9900;
+    border-left: 3px solid #cc9900;
+    padding-left: 10px;
+}
 </style>
-'''
-st.markdown(whatsapp_style, unsafe_allow_html=True)
+''', unsafe_allow_html=True)
 
 # ---------------------- Configuration API ----------------------
-# ---------------------- Configuration API améliorée ----------------------
 @retry(stop=stop_after_attempt(3), wait=wait_exponential(multiplier=1, min=4, max=10))
 def query_mistral(prompt, context):
     try:
@@ -137,57 +151,18 @@ def query_mistral(prompt, context):
     except requests.exceptions.RequestException as e:
         st.error(f"Erreur de connexion: {str(e)}")
         return None
-
-# ---------------------- Gestion de la réponse dans le chat ----------------------
-if user_input:
-    st.session_state.history.append(("user", user_input))
-    loading_msg = st.empty()
-    
-    try:
-        # 1. Recherche contextuelle
-        loading_msg.markdown("<div class='loading-msg'>🔍 Recherche dans les textes réglementaires...</div>", unsafe_allow_html=True)
-        
-        question_embedding = model.encode([user_input]) if model else None
-        if question_embedding is not None:
-            similarities = cosine_similarity(question_embedding, embeddings)[0]
-            top_indices = similarities.argsort()[-3:][::-1]
-            context = "\n".join([f"Source: {sources[i]}\n{texts[i]}" for i in top_indices])
-        else:
-            context = "\n".join([f"Source: {sources[i]}\n{texts[i]}" for i in range(min(3, len(texts)))])
-        
-        # 2. Appel API avec gestion des erreurs renforcée
-        loading_msg.markdown("<div class='loading-msg'>🧠 Analyse par l'expert IA...</div>", unsafe_allow_html=True)
-        
-        response = query_mistral(user_input, context)
-        
-        if response is not None and response.status_code == 200:
-            try:
-                generated_text = response.json()[0]["generated_text"]
-                answer = generated_text.split("[/INST]")[-1].strip()
-            except (KeyError, IndexError) as e:
-                answer = f"⚠️ Format de réponse inattendu\n\nExtraits pertinents:\n{context}"
-        else:
-            answer = f"""ℹ️ Service IA indisponible - Voici les références réglementaires pertinentes :
-            
-            {context}"""
-            
     except Exception as e:
-        answer = f"""⚠️ Erreur temporaire
-        \n\nNous vous proposons ces extraits :
-        \n{context if 'context' in locals() else 'Aucune référence disponible'}"""
-    
-    finally:
-        loading_msg.empty()
-    
-    st.session_state.history.append(("bot", answer))
-    st.rerun()
-# ---------------------- Session state ----------------------
+        st.error(f"Erreur inattendue: {str(e)}")
+        return None
+
+# ---------------------- Gestion de l'état de session ----------------------
 if "history" not in st.session_state:
     st.session_state.history = []
 
 # ---------------------- Interface de chat ----------------------
 st.markdown("### 💬 Chat avec MedRegBot")
 
+# Affichage de l'historique
 for role, msg in st.session_state.history:
     if role == "user":
         st.markdown(f"<div class='user-msg'>{msg}</div>", unsafe_allow_html=True)
@@ -197,40 +172,51 @@ for role, msg in st.session_state.history:
         st.markdown(f"<div class='loading-msg'>{msg}</div>", unsafe_allow_html=True)
     elif role == "error":
         st.markdown(f"<div class='error-msg'>{msg}</div>", unsafe_allow_html=True)
+    elif role == "warning":
+        st.markdown(f"<div class='warning-msg'>{msg}</div>", unsafe_allow_html=True)
 
+# Gestion de l'entrée utilisateur
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
     st.session_state.history.append(("user", user_input))
     loading_msg = st.empty()
     
     try:
-        # Recherche contextuelle
+        # Étape 1: Recherche contextuelle
         loading_msg.markdown("<div class='loading-msg'>🔍 Recherche dans les textes réglementaires...</div>", unsafe_allow_html=True)
         
         if model is not None:
             question_embedding = model.encode([user_input])
             similarities = cosine_similarity(question_embedding, embeddings)[0]
             top_indices = similarities.argsort()[-3:][::-1]
-            context = "\n".join([texts[i] for i in top_indices])
+            context = "\n\n".join([f"**Source:** {sources[i]}\n{texts[i]}" for i in top_indices])
         else:
-            # Fallback sans modèle
-            context = "\n".join(texts[:3])  # Premiers textes comme contexte
+            context = "\n\n".join([f"**Source:** {sources[i]}\n{texts[i]}" for i in range(min(3, len(texts)))])
+            st.session_state.history.append(("warning", "Mode dégradé - utilisation des premières références"))
         
-        # Appel API
+        # Étape 2: Appel API
         loading_msg.markdown("<div class='loading-msg'>🧠 Analyse par l'expert IA...</div>", unsafe_allow_html=True)
         
-        response = query_mistral(user_input, context) if st.secrets.get('HF_TOKEN') else None
+        response = None
+        if st.secrets.get('HF_TOKEN'):
+            response = query_mistral(user_input, context)
         
-        if response and response.status_code == 200:
-            generated_text = response.json()[0]["generated_text"]
-            answer = generated_text.split("[/INST]")[-1].strip()
+        # Étape 3: Traitement de la réponse
+        if response is not None and response.status_code == 200:
+            try:
+                generated_text = response.json()[0]["generated_text"]
+                answer = generated_text.split("[/INST]")[-1].strip()
+            except (KeyError, IndexError) as e:
+                answer = f"""⚠️ Format de réponse inattendu\n\n**Extraits pertinents:**\n{context}"""
         else:
-            answer = """⚠️ Service IA temporairement indisponible. 
-            Voici les extraits pertinents :
-            \n\n""" + "\n\n- ".join([texts[i] for i in (top_indices if model else range(3))])
+            answer = f"""ℹ️ Service IA indisponible\n\n**Références réglementaires pertinentes:**\n{context}"""
             
     except Exception as e:
-        answer = f"<div class='error-msg'>⚠️ Erreur critique: {str(e)}</div>"
+        answer = f"""⚠️ Erreur temporaire\n\n**Nous vous proposons ces extraits:**\n{
+            context if 'context' in locals() else 'Aucune référence disponible'
+        }"""
+        st.error(f"Erreur: {str(e)}")
+    
     finally:
         loading_msg.empty()
     
