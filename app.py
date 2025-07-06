@@ -83,7 +83,7 @@ if user_input:
     # --------- Construction du prompt pour Gemma ---------
     prompt = f"Tu es un expert en réglementation des dispositifs médicaux. En te basant sur le texte suivant, réponds de façon claire et complète à la question utilisateur.\n\nTexte: {context}\n\nQuestion: {user_input}\n\nRéponse:"
 
-    # --------- Appel à l'API Hugging Face Inference (Gemma) ---------
+    # --------- Appel à l'API Hugging Face Inference (Gemma) --------
     API_URL = "https://api-inference.huggingface.co/models/google/gemma-7b-it"
     headers = {"Authorization": "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"}  
 
