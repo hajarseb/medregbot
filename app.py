@@ -92,11 +92,11 @@ headers = {
     "Content-Type": "application/json"
 }
 
-    response = requests.post(API_URL, headers=headers, json={"inputs": prompt})
-    if response.status_code == 200:
-        answer = response.json()[0]["generated_text"].split("Réponse:")[-1].strip()
-    else:
-        answer = "⚠️ Une erreur est survenue avec l'API Hugging Face."
+response = requests.post(API_URL, headers=headers, json={"inputs": prompt})  # <-- Correction ici (enlevé 4 espaces)
+if response.status_code == 200:
+    answer = response.json()[0]["generated_text"].split("Réponse:")[-1].strip()
+else:
+    answer = "⚠️ Une erreur est survenue avec l'API Hugging Face."
 
     st.markdown(f"<div class='bot-msg'>{answer}</div>", unsafe_allow_html=True)
     st.session_state.history.append(("bot", answer))
