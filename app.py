@@ -82,8 +82,6 @@ for role, msg in st.session_state.history:
 user_input = st.chat_input("Posez votre question ici...")
 if user_input:
     st.session_state.history.append(("user", user_input))
-    
-    # Message de chargement
     st.session_state.history.append(("loading", "Recherche dans les réglementations..."))
     st.experimental_rerun()
 
@@ -110,32 +108,26 @@ if user_input:
             "Content-Type": "application/json"
         }
 
-        # Supprimer le message de chargement
+        # Supprimer le message de chargement initial
         st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
+        st.session_state.history.append(("loading", "Génération de la réponse..."))
         st.experimental_rerun()
 
-        with st.spinner("Génération de la réponse..."):
-            response = requests.post(
-                API_URL,
-                headers=headers,
-                json={
-                    "inputs": prompt,
-                    "parameters": {"max_new_tokens": 500}
-                },
-                timeout=45  # Temps plus long pour l'API gratuite
-            )
+        response = requests.post(
+            API_URL,
+            headers=headers,
+            json={
+                "inputs": prompt,
+                "parameters": {"max_new_tokens": 500}
+            },
+            timeout=45
+        )
         
         if response.status_code == 200:
             generated_text = response.json()[0]["generated_text"]
-            # Extraction de la partie après [/INST]
             answer = generated_text.split("[/INST]")[-1].strip()
         elif response.status_code == 503:
-            # Cas où le modèle doit être chargé
-            answer = "⚠️ Le modèle est en cours de chargement (attente 20-30s)..."
-            st.session_state.history.append(("loading", answer))
-            st.experimental_rerun()
-            time.sleep(25)  # Attente pour le chargement du modèle
-            return  # L'utilisateur devra renvoyer sa question
+            answer = "⚠️ Le modèle est en cours de chargement. Merci de réessayer dans 30 secondes."
         else:
             answer = f"⚠️ Erreur API (code {response.status_code}): {response.text[:200]}..."
 
@@ -144,7 +136,7 @@ if user_input:
     except Exception as e:
         answer = f"⚠️ Erreur inattendue: {str(e)}"
 
-    # Supprimer les messages de chargement et ajouter la réponse
+    # Mise à jour finale de l'historique
     st.session_state.history = [h for h in st.session_state.history if h[0] != "loading"]
     st.session_state.history.append(("bot", answer))
     st.experimental_rerun()
