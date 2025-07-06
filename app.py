@@ -213,7 +213,7 @@ if user_input:
             
     except Exception as e:
         answer = f"""⚠️ Erreur temporaire\n\n**Nous vous proposons ces extraits:**\n{
-            context if 'context' in locals() else 'Aucune référence disponible'
+        context if 'context' in locals() else 'Aucune référence disponible'
         }"""
         st.error(f"Erreur: {str(e)}")
     
