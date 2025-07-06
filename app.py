@@ -18,8 +18,7 @@ with col3:
     st.image("logo_right.jpeg", width=100)
 st.markdown("---")
 
-with open("embeddings_from_drive.pkl", "rb") as f:
-    data = pickle.load(f)
+uploaded
 
 texts = [d["text"] for d in data]
 sources = [d.get("source", "Inconnu")] * len(data)
