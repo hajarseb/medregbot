@@ -85,7 +85,7 @@ if user_input:
 
     # --------- Appel à l'API Hugging Face Inference (Gemma) --------
     API_URL = "https://api-inference.huggingface.co/models/google/gemma-7b-it"
-   import os
+   
 HF_TOKEN = st.secrets["HF_TOKEN"]
 headers = {
     "Authorization": f"Bearer {HF_TOKEN}",
